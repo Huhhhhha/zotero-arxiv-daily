@@ -26,5 +26,7 @@ class LocalReranker(BaseReranker):
             encode_kwargs = {}
         s1_feature = encoder.encode(s1,**encode_kwargs,show_progress_bar=True)
         s2_feature = encoder.encode(s2,**encode_kwargs,show_progress_bar=True)
+        # s1 is the candidate list; stash its embeddings for diversity-aware selection in Executor.
+        self.candidate_embeddings = s1_feature
         sim = encoder.similarity(s1_feature, s2_feature)
         return sim.numpy()
