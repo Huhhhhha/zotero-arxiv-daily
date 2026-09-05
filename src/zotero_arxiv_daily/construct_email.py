@@ -52,8 +52,15 @@ def get_empty_html():
   """
   return block_template
 
+def get_badge(tag:str|None) -> str:
+  if tag == "core":
+    return '<span style="display:inline-block;font-size:12px;font-weight:bold;color:#ffffff;background-color:#2e7d32;padding:2px 10px;border-radius:10px;margin-bottom:6px;">核心兴趣</span><br>'
+  if tag == "frontier":
+    return '<span style="display:inline-block;font-size:12px;font-weight:bold;color:#ffffff;background-color:#1565c0;padding:2px 10px;border-radius:10px;margin-bottom:6px;">前沿探索</span><br>'
+  return ''
+
 def get_block_html(title:str, authors:str, rate:str, tldr:str, pdf_url:str, affiliations:str=None):
-    block_template = """
+  block_template = """
     <table border="0" cellpadding="0" cellspacing="0" width="100%" style="font-family: Arial, sans-serif; border: 1px solid #ddd; border-radius: 8px; padding: 16px; background-color: #f9f9f9;">
     <tr>
         <td style="font-size: 20px; font-weight: bold; color: #333;">
@@ -109,6 +116,17 @@ def render_email(papers:list[Paper]) -> str:
     if len(papers) == 0 :
         return framework.replace('__CONTENT__', get_empty_html())
     
+    core_count = sum(1 for p in papers if p.tag == "core")
+    frontier_count = sum(1 for p in papers if p.tag == "frontier")
+    if core_count or frontier_count:
+        header = (
+            '<div style="font-family:Arial,sans-serif;font-size:14px;color:#555;padding:10px 14px;'
+            'border:1px solid #ddd;border-radius:8px;background-color:#f5f5f5;">'
+            f'本期精选 {len(papers)} 篇：<b>{core_count}</b> 篇核心兴趣（绿标）＋ '
+            f'<b>{frontier_count}</b> 篇前沿探索（蓝标，来自相邻方向的多样化选题）</div>'
+        )
+        parts.append(header)
+    
     for p in papers:
         #rate = get_stars(p.score)
         rate = round(p.score, 1) if p.score is not None else 'Unknown'
@@ -125,7 +143,8 @@ def render_email(papers:list[Paper]) -> str:
                 affiliations += ', ...'
         else:
             affiliations = 'Unknown Affiliation'
-        parts.append(get_block_html(p.title, authors, rate, p.tldr, p.pdf_url, affiliations))
+        title_html = get_badge(p.tag) + p.title
+        parts.append(get_block_html(title_html, authors, rate, p.tldr, p.pdf_url, affiliations))
 
     content = '<br>' + '</br><br>'.join(parts) + '</br>'
     return framework.replace('__CONTENT__', content)
