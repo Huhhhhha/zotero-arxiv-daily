@@ -13,6 +13,7 @@ from time import sleep
 from typing import Any, Callable, TypeVar
 from loguru import logger
 import requests
+from datetime import datetime, timedelta, timezone
 
 T = TypeVar("T")
 
@@ -112,8 +113,14 @@ class ArxivRetriever(BaseRetriever):
         super().__init__(config)
         if self.config.source.arxiv.category is None:
             raise ValueError("category must be specified for arxiv.")
+        self.days_back = int(self.config.source.arxiv.get("days_back", 1))
+        # With multi-day retrieval there can be thousands of candidates, so
+        # full text is only fetched for the top-ranked papers after reranking.
+        self.defer_full_text = self.days_back > 1
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
+        if self.days_back > 1:
+            return self._retrieve_raw_papers_by_date_range()
         client = arxiv.Client(num_retries=10, delay_seconds=10)
         query = '+'.join(self.config.source.arxiv.category)
         include_cross_list = self.config.source.arxiv.get("include_cross_list", False)
@@ -156,16 +163,53 @@ class ArxivRetriever(BaseRetriever):
 
         return raw_papers
 
+    def _retrieve_raw_papers_by_date_range(self) -> list[ArxivResult]:
+        client = arxiv.Client(num_retries=10, delay_seconds=3, page_size=100)
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        # Widen the query window to tolerate the moderation lag between
+        # submission and announcement; the first-version filter below keeps
+        # the effective window exact.
+        query_start = (now - timedelta(days=self.days_back + 3)).strftime("%Y%m%d%H%M")
+        query_end = now.strftime("%Y%m%d%H%M")
+        categories = " OR ".join(f"cat:{c}" for c in self.config.source.arxiv.category)
+        query = f"({categories}) AND submittedDate:[{query_start} TO {query_end}]"
+        search = arxiv.Search(
+            query=query,
+            sort_by=arxiv.SortCriterion.SubmittedDate,
+            sort_order=arxiv.SortOrder.Descending,
+        )
+        cutoff = now - timedelta(days=self.days_back)
+        raw_papers = []
+        for result in tqdm(client.results(search), desc="Fetching arxiv papers by date range"):
+            published = result.published
+            if published.tzinfo is not None:
+                published = published.astimezone(timezone.utc).replace(tzinfo=None)
+            # Skip revised versions of papers first submitted before the window.
+            if published < cutoff:
+                continue
+            raw_papers.append(result)
+            if self.config.executor.debug and len(raw_papers) >= 10:
+                break
+        return raw_papers
+
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
         title = raw_paper.title
         authors = [a.name for a in raw_paper.authors]
         abstract = raw_paper.summary
         pdf_url = raw_paper.pdf_url
-        full_text = extract_text_from_tar(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_html(raw_paper)
-        if full_text is None:
-            full_text = extract_text_from_pdf(raw_paper)
+        def extract_full_text():
+            full_text = extract_text_from_tar(raw_paper)
+            if full_text is None:
+                full_text = extract_text_from_html(raw_paper)
+            if full_text is None:
+                full_text = extract_text_from_pdf(raw_paper)
+            return full_text
+        if self.defer_full_text:
+            full_text = None
+            full_text_fetcher = extract_full_text
+        else:
+            full_text = extract_full_text()
+            full_text_fetcher = None
         return Paper(
             source=self.name,
             title=title,
@@ -174,6 +218,7 @@ class ArxivRetriever(BaseRetriever):
             url=raw_paper.entry_id,
             pdf_url=pdf_url,
             full_text=full_text,
+            full_text_fetcher=full_text_fetcher,
         )
 
 
