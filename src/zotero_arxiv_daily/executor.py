@@ -115,6 +115,8 @@ class Executor:
         num_diverse = int(cfg.num_diverse)
         pool_size = int(cfg.get("diverse_pool", 100))
         mmr_lambda = float(cfg.get("mmr_lambda", 0.3))
+        topics = cfg.get("diverse_topics", None)
+        labels = cfg.get("topic_labels", None)
 
         # Frontier candidates are restricted to the top diverse_pool by relevance,
         # which keeps them within the user's field while allowing different directions.
@@ -130,7 +132,33 @@ class Executor:
         have_embeddings = all(p.embedding is not None for p in pool)
         if not have_embeddings:
             logger.warning("No candidate embeddings available; diverse picks fall back to relevance order")
-        for _ in range(num_diverse):
+
+        topic_embeddings: list[np.ndarray] = []
+        if topics is not None and len(topics) > 0 and have_embeddings:
+            encode = getattr(self.reranker, "encode_texts", None)
+            if encode is None:
+                logger.warning("Reranker cannot encode topic descriptions; falling back to MMR diversity")
+            else:
+                try:
+                    topic_embeddings = [np.asarray(e) for e in encode(list(topics)[:num_diverse])]
+                except Exception as e:
+                    logger.warning(f"Failed to encode diverse topics, falling back to MMR: {e}")
+                    topic_embeddings = []
+
+        topic_picked = 0
+        for i, topic_emb in enumerate(topic_embeddings):
+            if not remaining:
+                break
+            label = labels[i] if labels is not None and i < len(labels) else "前沿探索"
+            best = max(remaining, key=lambda p: _cosine(p.embedding, topic_emb))
+            best.tag = "frontier"
+            best.tag_label = label
+            logger.info(f"Frontier paper for topic '{label}': {best.title}")
+            selected.append(best)
+            remaining.remove(best)
+            topic_picked += 1
+
+        for _ in range(num_diverse - topic_picked):
             if not remaining:
                 break
             if have_embeddings:
