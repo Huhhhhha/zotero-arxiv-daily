@@ -12,6 +12,9 @@ class BaseRetriever(ABC):
     def __init__(self, config:DictConfig):
         self.config = config
         self.retriever_config = getattr(config.source,self.name)
+        # Retrievers that fetch full text lazily (see Paper.ensure_full_text) do no
+        # network calls in convert_to_paper, so the pacing sleep is unnecessary.
+        self.defer_full_text = False
 
     @abstractmethod
     def _retrieve_raw_papers(self) -> list[RawPaperItem]:
@@ -33,7 +36,8 @@ class BaseRetriever(ABC):
                 continue
             if paper is not None:
                 papers.append(paper)
-            sleep(1)
+            if not self.defer_full_text:
+                sleep(1)
         return papers
 
 registered_retrievers = {}
