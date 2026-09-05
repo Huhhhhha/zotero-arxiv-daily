@@ -8,6 +8,7 @@ source:
   arxiv:
     category: null # The categories of target arxiv papers. Find the abbr of your research area from [here](https://arxiv.org/category_taxonomy). Example: ["cs.AI","cs.CV","cs.LG","cs.CL"]
     include_cross_list: false # Whether to include arXiv cross-list papers in subscribed categories. Example: true
+    days_back: 1 # How many days of new papers to retrieve. 1 (default) keeps the daily RSS behavior. Set >1 (e.g. 7) to retrieve papers first submitted within the last N days via the arXiv API, for weekly digests. When >1, cross-listed papers are always included and full text is only extracted for the top-ranked papers.
   biorxiv:
     category: null # The categories of target biorxiv papers. Find categories from [here](https://www.biorxiv.org/). Example: ["biochemistry","animal behavior and cognition"]
   medrxiv:
@@ -43,7 +44,7 @@ reranker:
   api:
     key: null # API Key of your embedding model API. Example: sk-xxx
     base_url: null # API URL of your embedding model API. Example: https://api.openai.com/v1
-    model: null # The model name of the embedding model. Example: text-embedding-3-large
+    model: null # The model name of your embedding model API. Example: text-embedding-3-large
     batch_size: null # The batch size for embedding API requests. Adjust to match your provider's limit. Example: 64
 
 executor:
