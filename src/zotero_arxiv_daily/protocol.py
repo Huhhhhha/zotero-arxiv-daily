@@ -6,6 +6,7 @@ import tiktoken
 from openai import OpenAI
 from loguru import logger
 import json
+import numpy as np
 RawPaperItem = TypeVar('RawPaperItem')
 
 
@@ -49,6 +50,8 @@ class Paper:
     affiliations: Optional[list[str]] = None
     score: Optional[float] = None
     full_text_fetcher: Optional[Callable[[], Optional[str]]] = None
+    embedding: Optional[np.ndarray] = None
+    tag: Optional[str] = None
 
     def ensure_full_text(self) -> None:
         if self.full_text is None and self.full_text_fetcher is not None:
