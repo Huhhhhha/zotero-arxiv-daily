@@ -53,3 +53,9 @@ executor:
   max_paper_num: 100 # The maximum number of the papers presented in the email. Example: 100
   source: ??? # The sources of papers to retrieve. Example: ['arxiv','biorxiv','medrxiv','chemrxiv']
   reranker: local # The reranker to use. Example: 'local' or 'api'
+  selection:
+    enabled: false # Whether to select papers by relevance+diversity instead of plain top-N truncation. Example: true
+    num_relevant: 3 # Number of papers chosen purely by relevance to your Zotero library. Example: 3
+    num_diverse: 2 # Number of frontier papers chosen for topical diversity via MMR within the top diverse_pool. Example: 2
+    diverse_pool: 100 # Frontier candidates are drawn only from the top diverse_pool papers by relevance, keeping them within your field. Example: 100
+    mmr_lambda: 0.3 # Relevance weight of MMR (0-1). Lower value gives more diverse picks. Example: 0.3
