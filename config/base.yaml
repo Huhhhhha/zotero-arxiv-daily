@@ -56,6 +56,8 @@ executor:
   selection:
     enabled: false # Whether to select papers by relevance+diversity instead of plain top-N truncation. Example: true
     num_relevant: 3 # Number of papers chosen purely by relevance to your Zotero library. Example: 3
-    num_diverse: 2 # Number of frontier papers chosen for topical diversity via MMR within the top diverse_pool. Example: 2
+    num_diverse: 2 # Number of frontier papers chosen from the top diverse_pool. Example: 2
     diverse_pool: 100 # Frontier candidates are drawn only from the top diverse_pool papers by relevance, keeping them within your field. Example: 100
-    mmr_lambda: 0.3 # Relevance weight of MMR (0-1). Lower value gives more diverse picks. Example: 0.3
+    mmr_lambda: 0.3 # Relevance weight of MMR (0-1). Lower value gives more diverse picks. Used when diverse_topics is not set. Example: 0.3
+    diverse_topics: null # Optional list of topic descriptions. When set, each frontier slot picks the pool paper whose embedding is most similar (cosine) to the corresponding topic, instead of MMR diversity. Example: ["SLAM combined with world models for robot prediction and planning.", "Semantic SLAM with object-level and open-vocabulary scene understanding."]
+    topic_labels: null # Optional short labels shown on the frontier email badges, one per diverse_topics entry. Example: ["SLAM×世界模型", "语义SLAM"]
