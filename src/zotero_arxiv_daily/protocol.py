@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Optional, TypeVar
+from typing import Callable, Optional, TypeVar
 from datetime import datetime
 import re
 import tiktoken
@@ -48,6 +48,15 @@ class Paper:
     tldr: Optional[str] = None
     affiliations: Optional[list[str]] = None
     score: Optional[float] = None
+    full_text_fetcher: Optional[Callable[[], Optional[str]]] = None
+
+    def ensure_full_text(self) -> None:
+        if self.full_text is None and self.full_text_fetcher is not None:
+            try:
+                self.full_text = self.full_text_fetcher()
+            except Exception as e:
+                logger.warning(f"Failed to fetch full text of {self.url}: {e}")
+                self.full_text = None
 
     def _generate_tldr_with_llm(self, openai_client:OpenAI,llm_params:dict) -> str:
         lang = llm_params.get('language', 'English')
