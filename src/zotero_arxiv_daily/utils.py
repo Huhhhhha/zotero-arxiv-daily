@@ -53,7 +53,7 @@ def _bm25_pick(query: str, candidates: dict[str, str], k1: float = 1.5, b: float
     return best_name
 
 
-def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | None = None) -> dict[str,str]:
+def extract_tex_code_from_tar(file_path:str,paper_id:str,paper_title:str | None = None) -> dict[str,str]:
     try:
         tar = tarfile.open(file_path)
     except tarfile.ReadError:
@@ -98,7 +98,7 @@ def extract_tex_code_from_tar(file_path:str, paper_id:str, paper_title:str | Non
         content = re.sub(r'\n+', '\n', content)
         content = re.sub(r'\\\\', '', content)
         content = re.sub(r'[ \t\r\f]{3,}', ' ', content)
-        if main_tex is None and re.search(r'\\begin\{document\}', content) and not any(w in t for w in ['example', 'sample', 'template']):
+        if main_tex is None and re.search(r'\\begin{document}', content) and not any(w in t for w in ['example', 'sample', 'template']):
             doc_block_candidates.append(t)
         file_contents[t] = content
 
@@ -153,7 +153,9 @@ def send_email(config:DictConfig, html:str):
     msg['From'] = _format_addr('Github Action <%s>' % sender)
     msg['To'] = _format_addr('You <%s>' % receiver)
     today = datetime.datetime.now().strftime('%Y/%m/%d')
-    msg['Subject'] = Header(f'Daily arXiv {today}', 'utf-8').encode()
+    days_back = int(config.source.arxiv.get("days_back", 1))
+    prefix = 'Weekly arXiv' if days_back > 1 else 'Daily arXiv'
+    msg['Subject'] = Header(f'{prefix} {today}', 'utf-8').encode()
 
     try:
         server = smtplib.SMTP(smtp_server, smtp_port)
