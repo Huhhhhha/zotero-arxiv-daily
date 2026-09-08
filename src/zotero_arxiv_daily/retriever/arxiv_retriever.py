@@ -198,7 +198,7 @@ class ArxivRetriever(BaseRetriever):
                     if self.config.executor.debug and len(raw_papers) >= 10:
                         break
                 return raw_papers
-            except (arxiv.HTTPError, arxiv.RequestError, ConnectionError) as exc:
+            except (arxiv.HTTPError, ConnectionError, requests.exceptions.RequestException) as exc:
                 if attempt == max_outer_retries - 1:
                     raise
                 wait = outer_delay * (attempt + 1)
