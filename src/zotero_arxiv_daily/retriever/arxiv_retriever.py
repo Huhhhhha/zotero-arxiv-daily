@@ -164,7 +164,7 @@ class ArxivRetriever(BaseRetriever):
         return raw_papers
 
     def _retrieve_raw_papers_by_date_range(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=3, page_size=100)
+        client = arxiv.Client(num_retries=10, delay_seconds=5, page_size=100)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         # Widen the query window to tolerate the moderation lag between
         # submission and announcement; the first-version filter below keeps
@@ -179,17 +179,35 @@ class ArxivRetriever(BaseRetriever):
             sort_order=arxiv.SortOrder.Descending,
         )
         cutoff = now - timedelta(days=self.days_back)
+        # export.arxiv.org intermittently rejects queries (5xx/429) for minutes
+        # at a time, which outlasts the arxiv package's short internal retries.
+        # Retry the whole pagination with a longer backoff before giving up.
+        max_outer_retries = 5
+        outer_delay = 60
         raw_papers = []
-        for result in tqdm(client.results(search), desc="Fetching arxiv papers by date range"):
-            published = result.published
-            if published.tzinfo is not None:
-                published = published.astimezone(timezone.utc).replace(tzinfo=None)
-            # Skip revised versions of papers first submitted before the window.
-            if published < cutoff:
-                continue
-            raw_papers.append(result)
-            if self.config.executor.debug and len(raw_papers) >= 10:
-                break
+        for attempt in range(max_outer_retries):
+            try:
+                for result in tqdm(client.results(search), desc="Fetching arxiv papers by date range"):
+                    published = result.published
+                    if published.tzinfo is not None:
+                        published = published.astimezone(timezone.utc).replace(tzinfo=None)
+                    # Skip revised versions of papers first submitted before the window.
+                    if published < cutoff:
+                        continue
+                    raw_papers.append(result)
+                    if self.config.executor.debug and len(raw_papers) >= 10:
+                        break
+                return raw_papers
+            except (arxiv.HTTPError, arxiv.RequestError, ConnectionError) as exc:
+                if attempt == max_outer_retries - 1:
+                    raise
+                wait = outer_delay * (attempt + 1)
+                status = getattr(exc, "status", type(exc).__name__)
+                logger.warning(
+                    f"arXiv API error ({status}) during date-range retrieval, "
+                    f"retry {attempt + 1}/{max_outer_retries} in {wait}s"
+                )
+                sleep(wait)
         return raw_papers
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
