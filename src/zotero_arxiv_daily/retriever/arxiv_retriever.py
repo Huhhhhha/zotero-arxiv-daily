@@ -21,6 +21,37 @@ DOWNLOAD_TIMEOUT = (10, 60)
 PDF_EXTRACT_TIMEOUT = 180
 TAR_EXTRACT_TIMEOUT = 180
 
+# arXiv 429-blocks on shared GitHub runner IPs commonly last an hour or more,
+# so same-IP retries only pay off if the job can outlast the block. These waits
+# spread retries over ~1.8h; pagination resumes from where the previous attempt
+# stopped, so each retry costs only the not-yet-fetched pages.
+DATE_RANGE_RETRY_WAITS = [60, 300, 600, 900, 900, 1200, 1200, 1200]
+
+# arXiv API etiquette (https://info.arxiv.org/help/api/tou.html): identify your
+# client. The arxiv package hardcodes a generic per-request user agent; a
+# descriptive one lets arXiv admins tell polite low-rate traffic apart when
+# reviewing shared-IP blocks.
+USER_AGENT = "zotero-arxiv-daily/1.0 (+https://github.com/Huhhhhha/zotero-arxiv-daily)"
+
+
+def _set_user_agent(client: arxiv.Client) -> None:
+    """Best-effort swap of the package's hardcoded user agent for USER_AGENT.
+
+    The arxiv package passes its own "user-agent" header on every call, so the
+    wrapper must override rather than merge.
+    """
+    try:
+        original_get = client._session.get
+
+        def get(url, **kwargs):
+            headers = dict(kwargs.pop("headers", None) or {})
+            headers["user-agent"] = USER_AGENT
+            return original_get(url, headers=headers, **kwargs)
+
+        client._session.get = get
+    except Exception:
+        pass
+
 
 def _download_file(url: str, path: str) -> None:
     with requests.get(url, stream=True, timeout=DOWNLOAD_TIMEOUT) as response:
@@ -165,6 +196,7 @@ class ArxivRetriever(BaseRetriever):
 
     def _retrieve_raw_papers_by_date_range(self) -> list[ArxivResult]:
         client = arxiv.Client(num_retries=2, delay_seconds=15, page_size=100)
+        _set_user_agent(client)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         # Widen the query window to tolerate the moderation lag between
         # submission and announcement; the first-version filter below keeps
@@ -179,48 +211,48 @@ class ArxivRetriever(BaseRetriever):
             sort_order=arxiv.SortOrder.Descending,
         )
         cutoff = now - timedelta(days=self.days_back)
-        # export.arxiv.org intermittently returns 429 for many minutes at a
-        # time -- GitHub-hosted runners share IPs with other users, so the
-        # limiter can be tripped by someone else's traffic. Same-IP retries
-        # are kept modest (~25 min) because a blocked IP usually stays blocked;
-        # the workflow-level backup slots retry on fresh IPs instead.
-        # Pagination restarts from page one on every attempt (the arxiv package
-        # cannot resume mid-pagination), so raw_papers is reset per attempt to
-        # avoid duplicates. If the API never recovers but some pages succeeded,
-        # fall back to the largest partial result -- the newest papers are on
-        # the first pages.
-        outer_waits = [60, 120, 180, 240] + [300] * 3
-        best_raw_papers: list[ArxivResult] = []
-        for attempt, wait_on_error in enumerate(outer_waits + [None]):
-            raw_papers: list[ArxivResult] = []
+        # export.arxiv.org intermittently 429s GitHub-hosted runners for an
+        # hour or more -- they share IPs with other users' traffic, so the
+        # limiter can be tripped by someone else. Retries span DATE_RANGE_RETRY_WAITS
+        # (~1.8h) to outlast a block; each attempt resumes pagination at the
+        # offset where the previous one stopped (Client.results(offset=...) is
+        # public API) instead of restarting from page one, so partial progress
+        # is never wasted and no page is requested twice. Entries that shifted
+        # into earlier positions while waiting re-hit the seen_ids dedupe.
+        # If the API never recovers but some pages succeeded, fall back to the
+        # partial result -- the newest papers are on the first pages.
+        raw_papers: list[ArxivResult] = []
+        seen_ids: set[str] = set()
+        raw_seen = 0  # raw entries consumed from the paged result set
+        for attempt, wait_on_error in enumerate(DATE_RANGE_RETRY_WAITS + [None]):
             try:
-                for result in tqdm(client.results(search), desc="Fetching arxiv papers by date range"):
+                for result in tqdm(client.results(search, offset=raw_seen), desc="Fetching arxiv papers by date range"):
+                    raw_seen += 1
                     published = result.published
                     if published.tzinfo is not None:
                         published = published.astimezone(timezone.utc).replace(tzinfo=None)
                     # Skip revised versions of papers first submitted before the window.
-                    if published < cutoff:
+                    if published < cutoff or result.entry_id in seen_ids:
                         continue
+                    seen_ids.add(result.entry_id)
                     raw_papers.append(result)
                     if self.config.executor.debug and len(raw_papers) >= 10:
                         break
                 return raw_papers
             except (arxiv.HTTPError, ConnectionError, requests.exceptions.RequestException) as exc:
-                if len(raw_papers) > len(best_raw_papers):
-                    best_raw_papers = raw_papers
                 if wait_on_error is None:
-                    if best_raw_papers:
+                    if raw_papers:
                         logger.warning(
-                            f"arXiv API still failing after {len(outer_waits)} retries; "
-                            f"falling back to partial result ({len(best_raw_papers)} papers)"
+                            f"arXiv API still failing after {len(DATE_RANGE_RETRY_WAITS)} retries; "
+                            f"falling back to partial result ({len(raw_papers)} papers)"
                         )
-                        return best_raw_papers
+                        return raw_papers
                     raise
                 status = getattr(exc, "status", type(exc).__name__)
                 logger.warning(
                     f"arXiv API error ({status}) during date-range retrieval, "
-                    f"retry {attempt + 1}/{len(outer_waits) + 1} in {wait_on_error}s "
-                    f"({len(raw_papers)} papers fetched before failure)"
+                    f"retry {attempt + 1}/{len(DATE_RANGE_RETRY_WAITS) + 1} in {wait_on_error}s "
+                    f"({len(raw_papers)} papers kept, resuming from offset {raw_seen})"
                 )
                 sleep(wait_on_error)
         raise RuntimeError("arXiv retrieval failed with no partial results")

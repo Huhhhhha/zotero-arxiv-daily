@@ -3,14 +3,17 @@ on:
   workflow_dispatch:
   schedule:
     # Primary slot: Tue 06:17 Beijing (Mon 22:17 UTC, off the hour to dodge scheduler congestion).
-    # Backup slots: Tue 08:19 / 10:23 Beijing. arXiv frequently 429s whole shared GitHub
-    # runner IP pools for an hour+, and re-running the workflow lands on a fresh IP,
-    # so failed weeks get automatic retries. The skip-check step makes every slot
-    # idempotent: if this week's email already went out (or a run is in progress),
-    # the later slots exit without doing anything.
+    # Backup slots: Tue 22:19 / Wed 10:23 Beijing, deliberately spread over ~1.5
+    # days so retries land on a different shared-IP batch of GitHub runners.
+    # arXiv 429-blocks on those shared IPs last an hour or more; the in-job
+    # retries in arxiv_retriever (~1.8h of backoff) ride out most blocks, and
+    # these later slots cover the rest. The skip-check step makes every slot
+    # idempotent: if this week's email already went out (or a run is in
+    # progress), the later slots exit without doing anything. The 36h lookback
+    # spans the primary-to-last-backup gap so no slot double-sends.
     - cron: '17 22 * * 1'
-    - cron: '19 00 * * 2'
-    - cron: '23 02 * * 2'
+    - cron: '19 14 * * 2'
+    - cron: '23 02 * * 3'
 
 permissions:
   contents: read
@@ -24,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          SINCE=$(date -u -d '36 hours ago' +%Y-%m-%dT%H:%M:%SZ)
           echo "Looking for runs of this workflow since $SINCE (excluding this run ${{ github.run_id }})"
           PRIOR=$(gh api --paginate "repos/${{ github.repository }}/actions/workflows/main.yml/runs?created=%3E%3D${SINCE}" \
             --jq '.workflow_runs[] | select(.id != ${{ github.run_id }}) | select((.status == "completed" and .conclusion == "success") or .status == "in_progress" or .status == "queued") | .id')
