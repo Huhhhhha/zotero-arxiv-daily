@@ -164,7 +164,7 @@ class ArxivRetriever(BaseRetriever):
         return raw_papers
 
     def _retrieve_raw_papers_by_date_range(self) -> list[ArxivResult]:
-        client = arxiv.Client(num_retries=10, delay_seconds=5, page_size=100)
+        client = arxiv.Client(num_retries=2, delay_seconds=15, page_size=100)
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         # Widen the query window to tolerate the moderation lag between
         # submission and announcement; the first-version filter below keeps
@@ -179,13 +179,20 @@ class ArxivRetriever(BaseRetriever):
             sort_order=arxiv.SortOrder.Descending,
         )
         cutoff = now - timedelta(days=self.days_back)
-        # export.arxiv.org intermittently rejects queries (5xx/429) for minutes
-        # at a time, which outlasts the arxiv package's short internal retries.
-        # Retry the whole pagination with a longer backoff before giving up.
-        max_outer_retries = 5
-        outer_delay = 60
-        raw_papers = []
-        for attempt in range(max_outer_retries):
+        # export.arxiv.org intermittently returns 429 for many minutes at a
+        # time -- GitHub-hosted runners share IPs with other users, so the
+        # limiter can be tripped by someone else's traffic and outlasts any
+        # short retry. Keep request pressure minimal (few client-internal
+        # retries) and back off patiently for ~45 minutes. Pagination
+        # restarts from page one on every attempt (the arxiv package cannot
+        # resume mid-pagination), so raw_papers is reset per attempt to
+        # avoid duplicates. If the API never recovers, fall back to the
+        # largest partial result instead of failing the whole run -- the
+        # newest papers are on the first pages.
+        outer_waits = [60, 120, 180, 240] + [300] * 7
+        best_raw_papers: list[ArxivResult] = []
+        for attempt, wait_on_error in enumerate(outer_waits + [None]):
+            raw_papers: list[ArxivResult] = []
             try:
                 for result in tqdm(client.results(search), desc="Fetching arxiv papers by date range"):
                     published = result.published
@@ -199,16 +206,24 @@ class ArxivRetriever(BaseRetriever):
                         break
                 return raw_papers
             except (arxiv.HTTPError, ConnectionError, requests.exceptions.RequestException) as exc:
-                if attempt == max_outer_retries - 1:
+                if len(raw_papers) > len(best_raw_papers):
+                    best_raw_papers = raw_papers
+                if wait_on_error is None:
+                    if best_raw_papers:
+                        logger.warning(
+                            f"arXiv API still failing after {len(outer_waits)} retries; "
+                            f"falling back to partial result ({len(best_raw_papers)} papers)"
+                        )
+                        return best_raw_papers
                     raise
-                wait = outer_delay * (attempt + 1)
                 status = getattr(exc, "status", type(exc).__name__)
                 logger.warning(
                     f"arXiv API error ({status}) during date-range retrieval, "
-                    f"retry {attempt + 1}/{max_outer_retries} in {wait}s"
+                    f"retry {attempt + 1}/{len(outer_waits) + 1} in {wait_on_error}s "
+                    f"({len(raw_papers)} papers fetched before failure)"
                 )
-                sleep(wait)
-        return raw_papers
+                sleep(wait_on_error)
+        raise RuntimeError("arXiv retrieval failed with no partial results")
 
     def convert_to_paper(self, raw_paper: ArxivResult) -> Paper:
         title = raw_paper.title
