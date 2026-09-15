@@ -181,15 +181,15 @@ class ArxivRetriever(BaseRetriever):
         cutoff = now - timedelta(days=self.days_back)
         # export.arxiv.org intermittently returns 429 for many minutes at a
         # time -- GitHub-hosted runners share IPs with other users, so the
-        # limiter can be tripped by someone else's traffic and outlasts any
-        # short retry. Keep request pressure minimal (few client-internal
-        # retries) and back off patiently for ~45 minutes. Pagination
-        # restarts from page one on every attempt (the arxiv package cannot
-        # resume mid-pagination), so raw_papers is reset per attempt to
-        # avoid duplicates. If the API never recovers, fall back to the
-        # largest partial result instead of failing the whole run -- the
-        # newest papers are on the first pages.
-        outer_waits = [60, 120, 180, 240] + [300] * 7
+        # limiter can be tripped by someone else's traffic. Same-IP retries
+        # are kept modest (~25 min) because a blocked IP usually stays blocked;
+        # the workflow-level backup slots retry on fresh IPs instead.
+        # Pagination restarts from page one on every attempt (the arxiv package
+        # cannot resume mid-pagination), so raw_papers is reset per attempt to
+        # avoid duplicates. If the API never recovers but some pages succeeded,
+        # fall back to the largest partial result -- the newest papers are on
+        # the first pages.
+        outer_waits = [60, 120, 180, 240] + [300] * 3
         best_raw_papers: list[ArxivResult] = []
         for attempt, wait_on_error in enumerate(outer_waits + [None]):
             raw_papers: list[ArxivResult] = []
