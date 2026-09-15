@@ -2,19 +2,49 @@ name: Send emails weekly
 on:
   workflow_dispatch:
   schedule:
+    # Primary slot: Tue 06:17 Beijing (Mon 22:17 UTC, off the hour to dodge scheduler congestion).
+    # Backup slots: Tue 08:19 / 10:23 Beijing. arXiv frequently 429s whole shared GitHub
+    # runner IP pools for an hour+, and re-running the workflow lands on a fresh IP,
+    # so failed weeks get automatic retries. The skip-check step makes every slot
+    # idempotent: if this week's email already went out (or a run is in progress),
+    # the later slots exit without doing anything.
     - cron: '17 22 * * 1'
+    - cron: '19 00 * * 2'
+    - cron: '23 02 * * 2'
+
+permissions:
+  contents: read
+  actions: read
 
 jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
     steps:
+      - name: Skip if this week's email was already sent
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          SINCE=$(date -u -d '24 hours ago' +%Y-%m-%dT%H:%M:%SZ)
+          echo "Looking for runs of this workflow since $SINCE (excluding this run ${{ github.run_id }})"
+          PRIOR=$(gh api --paginate "repos/${{ github.repository }}/actions/workflows/main.yml/runs?created=%3E%3D${SINCE}" \
+            --jq '.workflow_runs[] | select(.id != ${{ github.run_id }}) | select((.status == "completed" and .conclusion == "success") or .status == "in_progress" or .status == "queued") | .id')
+          if [ -n "$PRIOR" ]; then
+            echo "This week's email was already sent (or is being sent) by run(s): $PRIOR -- nothing to do."
+            echo "SKIP_REST=true" >> "$GITHUB_ENV"
+          else
+            echo "No successful run in the last 24h; proceeding."
+          fi
+
       - name: Checkout
+        if: env.SKIP_REST != 'true'
         uses: actions/checkout@v6
 
       - name: Setup uv
+        if: env.SKIP_REST != 'true'
         uses: astral-sh/setup-uv@v7
 
       - name: Run script
+        if: env.SKIP_REST != 'true'
         env:
           ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
           ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
