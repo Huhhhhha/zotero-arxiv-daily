@@ -62,3 +62,59 @@ jobs:
           echo "Use custom config: "
           cat config/custom.yaml
           uv run src/zotero_arxiv_daily/main.py
+
+      - name: Notify on failure
+        if: failure()
+        continue-on-error: true
+        env:
+          SENDER: ${{ secrets.SENDER }}
+          RECEIVER: ${{ secrets.RECEIVER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+        # The pipeline is only "working" while digest emails keep arriving;
+        # without this step a fully rate-limited week fails silently. Any
+        # step failure (including a rare skip-check hiccup) sends a short
+        # heads-up mail using the same SMTP account as the digest itself.
+        run: |
+          python3 - <<'PYEOF'
+          import os, re, smtplib
+          from email.header import Header
+          from email.mime.text import MIMEText
+          from email.utils import formataddr
+
+          run_url = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          smtp_server, smtp_port = "smtp.qq.com", 465
+          try:
+              cfg = open("config/custom.yaml", encoding="utf-8").read()
+              server = re.search(r"smtp_server:\s*['\"]?([^\s'\"#]+)", cfg)
+              port = re.search(r"smtp_port:\s*['\"]?(\d+)", cfg)
+              if server: smtp_server = server.group(1)
+              if port: smtp_port = int(port.group(1))
+          except OSError:
+              pass
+
+          sender = os.environ["SENDER"]
+          receiver = os.environ["RECEIVER"]
+          password = os.environ["SENDER_PASSWORD"]
+          body = (
+              "This week's zotero-arxiv-daily run FAILED, so no digest email went out.\n\n"
+              f"Run details: {run_url}\n\n"
+              "The remaining schedule slots this week will retry automatically; "
+              "you can also re-run the workflow manually."
+          )
+          msg = MIMEText(body, "plain", "utf-8")
+          msg["From"] = formataddr((Header("Github Action", "utf-8").encode(), sender))
+          msg["To"] = formataddr((Header("You", "utf-8").encode(), receiver))
+          msg["Subject"] = Header("Weekly arXiv digest FAILED", "utf-8").encode()
+          try:
+              conn = smtplib.SMTP(smtp_server, smtp_port, timeout=60)
+              conn.starttls()
+          except Exception:
+              try:
+                  conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=60)
+              except Exception:
+                  conn = smtplib.SMTP(smtp_server, smtp_port, timeout=60)
+          with conn:
+              conn.login(sender, password)
+              conn.sendmail(sender, [receiver], msg.as_string())
+          print("Failure notification sent.")
+          PYEOF

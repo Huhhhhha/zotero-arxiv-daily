@@ -17,6 +17,26 @@ def test_render_email_empty_list():
     assert "No Papers Today" in html
 
 
+def test_render_email_notice_banner_before_papers():
+    paper = make_sample_paper(score=7.5, tldr="A great paper.", affiliations=["MIT"])
+    html = render_email([paper], notice="arXiv API 限流，本期候选抓取不完整")
+    assert "抓取不完整" in html
+    assert "Sample Paper Title" in html
+    assert html.index("抓取不完整") < html.index("Sample Paper Title")
+
+
+def test_render_email_notice_with_empty_list():
+    html = render_email([], notice="partial retrieval notice")
+    assert "partial retrieval notice" in html
+    assert "No Papers Today" in html
+
+
+def test_render_email_without_notice_has_no_warning_mark():
+    paper = make_sample_paper(score=7.5, tldr="ok", affiliations=None)
+    html = render_email([paper], notice=None)
+    assert "⚠️" not in html
+
+
 def test_render_email_author_truncation():
     authors = [f"Author {i}" for i in range(10)]
     paper = make_sample_paper(authors=authors, score=7.0, tldr="ok")

@@ -112,9 +112,21 @@ def get_stars(score:float):
         return '<div class="star-wrapper">'+full_star * full_star_num + half_star * half_star_num + '</div>'
 
 
-def render_email(papers:list[Paper]) -> str:
+def get_notice_html(notice:str) -> str:
+    return (
+        '<div style="font-family:Arial,sans-serif;font-size:14px;color:#8a6d3b;'
+        'border:1px solid #e0c97f;border-radius:8px;background-color:#fcf4da;'
+        f'padding:10px 14px;">⚠️ {notice}</div>'
+    )
+
+def render_email(papers:list[Paper], notice:str|None=None) -> str:
     parts = []
+    if notice:
+        parts.append(get_notice_html(notice))
     if len(papers) == 0 :
+        if notice:
+            parts.append(get_empty_html())
+            return framework.replace('__CONTENT__', '<br>' + '</br><br>'.join(parts) + '</br>')
         return framework.replace('__CONTENT__', get_empty_html())
     
     core_count = sum(1 for p in papers if p.tag == "core")

@@ -184,9 +184,14 @@ class Executor:
             logger.error(f"No zotero papers found. Please check your zotero settings:\n{self.config.zotero}")
             return
         all_papers = []
+        partial_sources = []
         for source, retriever in self.retrievers.items():
             logger.info(f"Retrieving {source} papers...")
             papers = retriever.retrieve_papers()
+            if getattr(retriever, "partial_retrieval", False):
+                partial_sources.append(
+                    f"{source}: {getattr(retriever, 'partial_retrieval_detail', '')}"
+                )
             if len(papers) == 0:
                 logger.info(f"No {source} papers found")
                 continue
@@ -213,6 +218,10 @@ class Executor:
             logger.info("No new papers found. No email will be sent.")
             return
         logger.info("Sending email...")
-        email_content = render_email(reranked_papers)
+        notice = (
+            f"arXiv API 限流，本期候选论文抓取不完整（{'; '.join(partial_sources)}），"
+            "以下清单可能遗漏部分新论文" if partial_sources else None
+        )
+        email_content = render_email(reranked_papers, notice)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")

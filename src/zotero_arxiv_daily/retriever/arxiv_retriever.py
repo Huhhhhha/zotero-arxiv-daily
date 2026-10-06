@@ -27,6 +27,11 @@ TAR_EXTRACT_TIMEOUT = 180
 # stopped, so each retry costs only the not-yet-fetched pages.
 DATE_RANGE_RETRY_WAITS = [60, 300, 600, 900, 900, 1200, 1200, 1200]
 
+# 429 and the 5xx/timeout-adjacent codes can clear on their own, so they are
+# worth the retry ladder. Anything else (400 bad query, 401, 404, ...) is
+# deterministic: repeating the same request for another 1.8h cannot succeed.
+RETRYABLE_HTTP_STATUSES = {403, 408, 429, 500, 502, 503, 504}
+
 # arXiv API etiquette (https://info.arxiv.org/help/api/tou.html): identify your
 # client. The arxiv package hardcodes a generic per-request user agent; a
 # descriptive one lets arXiv admins tell polite low-rate traffic apart when
@@ -148,6 +153,11 @@ class ArxivRetriever(BaseRetriever):
         # With multi-day retrieval there can be thousands of candidates, so
         # full text is only fetched for the top-ranked papers after reranking.
         self.defer_full_text = self.days_back > 1
+        # Set when the retry ladder (or a fatal API error) gave up and the run
+        # proceeds with a partial candidate list; the executor surfaces this
+        # as a notice in the digest email.
+        self.partial_retrieval = False
+        self.partial_retrieval_detail: str | None = None
 
     def _retrieve_raw_papers(self) -> list[ArxivResult]:
         if self.days_back > 1:
@@ -219,8 +229,10 @@ class ArxivRetriever(BaseRetriever):
         # public API) instead of restarting from page one, so partial progress
         # is never wasted and no page is requested twice. Entries that shifted
         # into earlier positions while waiting re-hit the seen_ids dedupe.
-        # If the API never recovers but some pages succeeded, fall back to the
-        # partial result -- the newest papers are on the first pages.
+        # Deterministic API failures (bad query etc., see RETRYABLE_HTTP_STATUSES)
+        # skip the ladder: return the partial result if any was fetched, else
+        # raise immediately. Partial fallbacks set partial_retrieval so the
+        # digest email can say the candidate list may be incomplete.
         raw_papers: list[ArxivResult] = []
         seen_ids: set[str] = set()
         raw_seen = 0  # raw entries consumed from the paged result set
@@ -239,12 +251,24 @@ class ArxivRetriever(BaseRetriever):
                     if self.config.executor.debug and len(raw_papers) >= 10:
                         break
                 return raw_papers
-            except (arxiv.HTTPError, ConnectionError, requests.exceptions.RequestException) as exc:
-                if wait_on_error is None:
+            except (arxiv.HTTPError, arxiv.UnexpectedEmptyPageError, ConnectionError, requests.exceptions.RequestException) as exc:
+                fatal_status = (
+                    isinstance(exc, arxiv.HTTPError)
+                    and exc.status not in RETRYABLE_HTTP_STATUSES
+                )
+                if wait_on_error is None or fatal_status:
                     if raw_papers:
+                        self.partial_retrieval = True
+                        self.partial_retrieval_detail = (
+                            f"{len(raw_papers)} candidates fetched before truncation"
+                        )
+                        reason = (
+                            f"fatal arXiv API error (HTTP {exc.status})"
+                            if fatal_status
+                            else f"arXiv API still failing after {len(DATE_RANGE_RETRY_WAITS)} retries"
+                        )
                         logger.warning(
-                            f"arXiv API still failing after {len(DATE_RANGE_RETRY_WAITS)} retries; "
-                            f"falling back to partial result ({len(raw_papers)} papers)"
+                            f"{reason}; falling back to partial result ({len(raw_papers)} papers)"
                         )
                         return raw_papers
                     raise

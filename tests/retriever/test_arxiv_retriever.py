@@ -110,20 +110,22 @@ def _test_entries(count: int) -> list[SimpleNamespace]:
 
 class _BlockThenRecoverClient:
     """arXiv API stand-in: every call yields at most `fail_after` entries and
-    then 429s, until `fail_until_call` calls have been made; afterwards it
-    serves the rest of the set starting at the requested offset."""
+    then raises `status` (429 by default), until `fail_until_call` calls have
+    been made; afterwards it serves the rest of the set starting at the
+    requested offset."""
 
-    def __init__(self, entries: list, fail_after: int, fail_until_call: int):
+    def __init__(self, entries: list, fail_after: int, fail_until_call: int, status: int = 429):
         self.entries = entries
         self.fail_after = fail_after
         self.fail_until_call = fail_until_call
+        self.status = status
         self.offsets: list[int] = []
 
     def results(self, search, offset=0):
         self.offsets.append(offset)
         if len(self.offsets) <= self.fail_until_call:
             yield from self.entries[offset:offset + self.fail_after]
-            raise arxiv.HTTPError(url="https://export.arxiv.org/api/query", retry=1, status=429)
+            raise arxiv.HTTPError(url="https://export.arxiv.org/api/query", retry=1, status=self.status)
         yield from self.entries[offset:]
 
 
@@ -184,10 +186,13 @@ def test_date_range_falls_back_to_partial_result(config, monkeypatch):
     entries = _test_entries(5)
     client = _BlockThenRecoverClient(entries, fail_after=3, fail_until_call=10**9)
 
-    papers = _date_range_retriever(config, monkeypatch, client)._retrieve_raw_papers_by_date_range()
+    retriever = _date_range_retriever(config, monkeypatch, client)
+    papers = retriever._retrieve_raw_papers_by_date_range()
 
     assert client.offsets == [0, 3, 5]
     assert [p.entry_id for p in papers] == [e.entry_id for e in entries]
+    assert retriever.partial_retrieval is True
+    assert "5 candidates" in retriever.partial_retrieval_detail
 
 
 def test_date_range_raises_when_nothing_was_retrieved(config, monkeypatch):
@@ -197,6 +202,65 @@ def test_date_range_raises_when_nothing_was_retrieved(config, monkeypatch):
 
     with pytest.raises(arxiv.HTTPError):
         _date_range_retriever(config, monkeypatch, client)._retrieve_raw_papers_by_date_range()
+
+
+def test_date_range_fast_fails_on_deterministic_status(config, monkeypatch):
+    monkeypatch.setattr(arxiv_retriever, "DATE_RANGE_RETRY_WAITS", [0, 0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(arxiv_retriever, "sleep", sleeps.append)
+    client = _BlockThenRecoverClient(_test_entries(3), fail_after=0, fail_until_call=10**9, status=400)
+
+    with pytest.raises(arxiv.HTTPError) as exc_info:
+        _date_range_retriever(config, monkeypatch, client)._retrieve_raw_papers_by_date_range()
+
+    assert exc_info.value.status == 400
+    assert client.offsets == [0]
+    assert sleeps == []
+
+
+def test_date_range_fatal_status_returns_partial_when_some_fetched(config, monkeypatch):
+    monkeypatch.setattr(arxiv_retriever, "DATE_RANGE_RETRY_WAITS", [0, 0])
+    sleeps: list[float] = []
+    monkeypatch.setattr(arxiv_retriever, "sleep", sleeps.append)
+    entries = _test_entries(5)
+    client = _BlockThenRecoverClient(entries, fail_after=3, fail_until_call=10**9, status=400)
+
+    retriever = _date_range_retriever(config, monkeypatch, client)
+    papers = retriever._retrieve_raw_papers_by_date_range()
+
+    assert client.offsets == [0]
+    assert sleeps == []
+    assert [p.entry_id for p in papers] == [e.entry_id for e in entries[:3]]
+    assert retriever.partial_retrieval is True
+
+
+class _EmptyPageThenRecoverClient:
+    """arXiv API stand-in: the first call raises UnexpectedEmptyPageError (the
+    package's sporadic brittleness), later calls serve the full set."""
+
+    def __init__(self, entries: list):
+        self.entries = entries
+        self.offsets: list[int] = []
+
+    def results(self, search, offset=0):
+        self.offsets.append(offset)
+        if len(self.offsets) == 1:
+            raise arxiv.UnexpectedEmptyPageError(
+                url="https://export.arxiv.org/api/query", retry=0, raw_feed={}
+            )
+        yield from self.entries[offset:]
+
+
+def test_date_range_retries_on_unexpected_empty_page(config, monkeypatch):
+    monkeypatch.setattr(arxiv_retriever, "DATE_RANGE_RETRY_WAITS", [0])
+    monkeypatch.setattr(arxiv_retriever, "sleep", lambda _seconds: None)
+    entries = _test_entries(4)
+    client = _EmptyPageThenRecoverClient(entries)
+
+    papers = _date_range_retriever(config, monkeypatch, client)._retrieve_raw_papers_by_date_range()
+
+    assert client.offsets == [0, 0]
+    assert [p.entry_id for p in papers] == [e.entry_id for e in entries]
 
 
 def test_set_user_agent_overrides_package_header():
