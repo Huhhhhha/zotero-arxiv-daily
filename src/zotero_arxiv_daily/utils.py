@@ -152,7 +152,9 @@ def send_email(config:DictConfig, html:str):
     msg = MIMEText(html, 'html', 'utf-8')
     msg['From'] = _format_addr('Github Action <%s>' % sender)
     msg['To'] = _format_addr('You <%s>' % receiver)
-    today = datetime.datetime.now().strftime('%Y/%m/%d')
+    as_of = config.source.arxiv.get("as_of")
+    digest_time = datetime.datetime.fromisoformat(str(as_of)) if as_of else datetime.datetime.now()
+    today = digest_time.strftime('%Y/%m/%d')
     days_back = int(config.source.arxiv.get("days_back", 1))
     prefix = 'Weekly arXiv' if days_back > 1 else 'Daily arXiv'
     msg['Subject'] = Header(f'{prefix} {today}', 'utf-8').encode()
@@ -170,4 +172,7 @@ def send_email(config:DictConfig, html:str):
 
     server.login(sender, password)
     server.sendmail(sender, [receiver], msg.as_string())
-    server.quit()
+    try:
+        server.quit()
+    except Exception as exc:
+        logger.warning(f"SMTP accepted the email but closing the session failed: {exc}")

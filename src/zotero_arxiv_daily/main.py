@@ -1,6 +1,9 @@
 import os
 import sys
 import logging
+import json
+from datetime import datetime, timezone
+from pathlib import Path
 from omegaconf import DictConfig
 import hydra
 from loguru import logger
@@ -29,7 +32,17 @@ def main(config:DictConfig):
         logger.info("Debug mode is enabled")
     
     executor = Executor(config)
-    executor.run()
+    sent = executor.run()
+    receipt_path = os.environ.get("DIGEST_RECEIPT_PATH")
+    if receipt_path:
+        if not sent:
+            raise RuntimeError("No email was sent; refusing to record a delivery receipt.")
+        receipt = {
+            "digest_date": os.environ["DIGEST_DATE"],
+            "run_id": os.environ.get("GITHUB_RUN_ID"),
+            "sent_at": datetime.now(timezone.utc).isoformat(),
+        }
+        Path(receipt_path).write_text(json.dumps(receipt) + "\n", encoding="utf-8")
 
 if __name__ == '__main__':
     main()

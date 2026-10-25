@@ -277,3 +277,27 @@ def test_set_user_agent_overrides_package_header():
     client._session.get("https://export.arxiv.org/api/query", headers={"user-agent": "arxiv.py/2.3.2"})
 
     assert captured["user-agent"].startswith("zotero-arxiv-daily/")
+
+
+def test_delayed_recovery_keeps_original_submission_window(config, monkeypatch):
+    config.source.arxiv.as_of = "2026-10-20T06:17:00+08:00"
+    window_end = dt.datetime(2026, 10, 19, 22, 17, tzinfo=dt.timezone.utc)
+    entries = [
+        _make_arxiv_result("too-old", window_end - dt.timedelta(days=8)),
+        _make_arxiv_result("in-window", window_end - dt.timedelta(days=6)),
+        _make_arxiv_result("too-new", window_end + dt.timedelta(days=1)),
+    ]
+    queries = []
+    class Client:
+        def results(self, search, offset=0):
+            queries.append(search.query)
+            yield from entries
+    retriever = _date_range_retriever(config, monkeypatch, Client())
+    assert [p.entry_id for p in retriever._retrieve_raw_papers_by_date_range()] == ["in-window"]
+    assert "TO 202610192217]" in queries[0]
+
+
+def test_recovery_timestamp_requires_timezone(config, monkeypatch):
+    config.source.arxiv.as_of = "2026-10-20T06:17:00"
+    with pytest.raises(ValueError, match="timezone"):
+        _date_range_retriever(config, monkeypatch, _PageScriptedClient([[]]))._retrieve_raw_papers_by_date_range()

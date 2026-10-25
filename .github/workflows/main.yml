@@ -1,53 +1,57 @@
 name: Send emails weekly
 on:
   workflow_dispatch:
+    inputs:
+      digest_date:
+        description: "Tuesday to recover (YYYY-MM-DD); blank means the latest weekly digest"
+        required: false
+        type: string
+      force:
+        description: "Send again even if a delivery receipt exists"
+        required: false
+        default: false
+        type: boolean
   schedule:
-    # Primary slot: Tue 06:17 Beijing (Mon 22:17 UTC, off the hour to dodge scheduler congestion).
-    # Backup slots: Tue 22:19 / Wed 10:23 Beijing, deliberately spread over ~1.5
-    # days so retries land on a different shared-IP batch of GitHub runners.
-    # arXiv 429-blocks on those shared IPs last an hour or more; the in-job
-    # retries in arxiv_retriever (~1.8h of backoff) ride out most blocks, and
-    # these later slots cover the rest. The skip-check step makes every slot
-    # idempotent: if this week's email already went out (or a run is in
-    # progress), the later slots exit without doing anything. The 36h lookback
-    # spans the primary-to-last-backup gap so no slot double-sends.
-    - cron: '17 22 * * 1'
-    - cron: '19 14 * * 2'
-    - cron: '23 02 * * 3'
+    # Beijing 06:17 / 22:19 / 10:23 each day. Tuesday is the primary
+    # delivery day; later slots recover a missed trigger or failed send.
+    # A receipt for the Tuesday digest keeps every later slot idempotent.
+    - cron: '17 22 * * *'
+    - cron: '19 14 * * *'
+    - cron: '23 02 * * *'
 
 permissions:
   contents: read
   actions: read
 
+concurrency:
+  group: weekly-arxiv-email
+  cancel-in-progress: false
+
 jobs:
   calculate-and-send:
     runs-on: ubuntu-latest
+    timeout-minutes: 240
     steps:
-      - name: Skip if this week's email was already sent
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Check weekly delivery receipt
+        id: delivery
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          SINCE=$(date -u -d '36 hours ago' +%Y-%m-%dT%H:%M:%SZ)
-          echo "Looking for runs of this workflow since $SINCE (excluding this run ${{ github.run_id }})"
-          PRIOR=$(gh api --paginate "repos/${{ github.repository }}/actions/workflows/main.yml/runs?created=%3E%3D${SINCE}" \
-            --jq '.workflow_runs[] | select(.id != ${{ github.run_id }}) | select((.status == "completed" and .conclusion == "success") or .status == "in_progress" or .status == "queued") | .id')
-          if [ -n "$PRIOR" ]; then
-            echo "This week's email was already sent (or is being sent) by run(s): $PRIOR -- nothing to do."
-            echo "SKIP_REST=true" >> "$GITHUB_ENV"
-          else
-            echo "No successful run in the last 24h; proceeding."
-          fi
-
-      - name: Checkout
-        if: env.SKIP_REST != 'true'
-        uses: actions/checkout@v6
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          REQUESTED_DIGEST_DATE: ${{ inputs.digest_date }}
+          FORCE_SEND: ${{ inputs.force }}
+        run: python3 .github/scripts/weekly_digest.py
 
       - name: Setup uv
-        if: env.SKIP_REST != 'true'
+        if: steps.delivery.outputs.should_send == 'true'
         uses: astral-sh/setup-uv@v7
 
       - name: Run script
-        if: env.SKIP_REST != 'true'
+        if: steps.delivery.outputs.should_send == 'true'
         env:
           ZOTERO_ID: ${{ secrets.ZOTERO_ID }}
           ZOTERO_KEY: ${{ secrets.ZOTERO_KEY }}
@@ -57,11 +61,23 @@ jobs:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_API_BASE: ${{ secrets.OPENAI_API_BASE }}
           CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+          DIGEST_DATE: ${{ steps.delivery.outputs.digest_date }}
+          DIGEST_AS_OF: ${{ steps.delivery.outputs.as_of }}
+          DIGEST_RECEIPT_PATH: ${{ runner.temp }}/digest-delivery.json
         run: |
-          printf "%b\n" "$CUSTOM_CONFIG" > config/custom.yaml
-          echo "Use custom config: "
-          cat config/custom.yaml
-          uv run src/zotero_arxiv_daily/main.py
+          printf '%s\n' "$CUSTOM_CONFIG" > config/custom.yaml
+          uv run src/zotero_arxiv_daily/main.py \
+            "source.arxiv.as_of=$DIGEST_AS_OF" executor.send_empty=true
+
+      - name: Save SMTP delivery receipt
+        if: steps.delivery.outputs.should_send == 'true' && success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.delivery.outputs.receipt_name }}
+          path: ${{ runner.temp }}/digest-delivery.json
+          if-no-files-found: error
+          retention-days: 90
+          overwrite: true
 
       - name: Notify on failure
         if: failure()
@@ -70,10 +86,6 @@ jobs:
           SENDER: ${{ secrets.SENDER }}
           RECEIVER: ${{ secrets.RECEIVER }}
           SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
-        # The pipeline is only "working" while digest emails keep arriving;
-        # without this step a fully rate-limited week fails silently. Any
-        # step failure (including a rare skip-check hiccup) sends a short
-        # heads-up mail using the same SMTP account as the digest itself.
         run: |
           python3 - <<'PYEOF'
           import os, re, smtplib
@@ -96,23 +108,20 @@ jobs:
           receiver = os.environ["RECEIVER"]
           password = os.environ["SENDER_PASSWORD"]
           body = (
-              "This week's zotero-arxiv-daily run FAILED, so no digest email went out.\n\n"
+              "The weekly zotero-arxiv-daily workflow failed.\n\n"
               f"Run details: {run_url}\n\n"
-              "The remaining schedule slots this week will retry automatically; "
-              "you can also re-run the workflow manually."
+              "Later daily slots retry automatically unless an SMTP delivery receipt exists. "
+              "If receipt upload failed after sending, check the logs before forcing a resend."
           )
           msg = MIMEText(body, "plain", "utf-8")
           msg["From"] = formataddr((Header("Github Action", "utf-8").encode(), sender))
           msg["To"] = formataddr((Header("You", "utf-8").encode(), receiver))
-          msg["Subject"] = Header("Weekly arXiv digest FAILED", "utf-8").encode()
-          try:
+          msg["Subject"] = Header("Weekly arXiv digest workflow FAILED", "utf-8").encode()
+          if smtp_port == 465:
+              conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=60)
+          else:
               conn = smtplib.SMTP(smtp_server, smtp_port, timeout=60)
               conn.starttls()
-          except Exception:
-              try:
-                  conn = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=60)
-              except Exception:
-                  conn = smtplib.SMTP(smtp_server, smtp_port, timeout=60)
           with conn:
               conn.login(sender, password)
               conn.sendmail(sender, [receiver], msg.as_string())

@@ -281,3 +281,27 @@ def test_run_no_papers_send_empty_true(config, monkeypatch):
     assert len(sent) == 1, "Email should be sent even with no papers when send_empty=true"
     _, _, body = sent[0]
     assert "text/html" in body
+
+
+def test_topic_only_selection_can_fall_back_when_topic_encoding_fails(config):
+    from types import SimpleNamespace
+    import numpy as np
+    from zotero_arxiv_daily.protocol import Paper
+
+    config.executor.selection.enabled = True
+    config.executor.selection.num_relevant = 0
+    config.executor.selection.num_diverse = 2
+    config.executor.selection.diverse_topics = ["semantic SLAM", "world action models"]
+    executor = Executor.__new__(Executor)
+    executor.config = config
+    def fail(texts):
+        raise OSError("encoder unavailable")
+    executor.reranker = SimpleNamespace(encode_texts=fail)
+    papers = [
+        Paper(source="arxiv", title=str(i), authors=[], abstract="abstract",
+              url=str(i), score=float(5-i), embedding=np.eye(3)[i])
+        for i in range(3)
+    ]
+    chosen = executor.select_papers(papers)
+    assert len(chosen) == 2
+    assert len({p.url for p in chosen}) == 2

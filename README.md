@@ -172,7 +172,11 @@ That's all! Now you can test the workflow by manually triggering it:
 
 Then check the log and the receiver email after it finishes.
 
-By default, the main workflow runs on 22:00 UTC everyday. You can change this time by editting the workflow config `.github/workflows/main.yml`.
+The weekly workflow targets Tuesday 06:17 Beijing time. It checks delivery again daily at 06:17, 10:23 and 22:19 Beijing time, so a missed schedule or failed run can recover later in the same week. An artifact receipt created only after SMTP acceptance prevents subsequent slots from sending the same digest again; skipped successful jobs do not count as delivery. Concurrent runs are serialized.
+
+Recovery keeps the seven-day retrieval window fixed to the original Tuesday, including its date in the email subject. To recover an older digest manually, run **Send emails weekly** and set `digest_date` to that Tuesday (`YYYY-MM-DD`). Leave `force` off unless you intentionally want a second copy. An empty weekly paper list still sends a status email. Local/daily use retains the configured `send_empty` behavior.
+
+The optional `source.arxiv.as_of` configuration is a timezone-aware ISO timestamp for reproducible date-range retrieval; the weekly workflow sets it automatically.
 
 ### Local Running
 Supported by [uv](https://github.com/astral-sh/uv), this workflow can easily run on your local device if uv is installed:

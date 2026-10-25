@@ -207,7 +207,11 @@ class ArxivRetriever(BaseRetriever):
     def _retrieve_raw_papers_by_date_range(self) -> list[ArxivResult]:
         client = arxiv.Client(num_retries=2, delay_seconds=15, page_size=100)
         _set_user_agent(client)
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        as_of = self.config.source.arxiv.get("as_of")
+        now = datetime.fromisoformat(str(as_of)) if as_of else datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            raise ValueError("source.arxiv.as_of must include a timezone.")
+        now = now.astimezone(timezone.utc).replace(tzinfo=None)
         # Widen the query window to tolerate the moderation lag between
         # submission and announcement; the first-version filter below keeps
         # the effective window exact.
@@ -244,7 +248,7 @@ class ArxivRetriever(BaseRetriever):
                     if published.tzinfo is not None:
                         published = published.astimezone(timezone.utc).replace(tzinfo=None)
                     # Skip revised versions of papers first submitted before the window.
-                    if published < cutoff or result.entry_id in seen_ids:
+                    if published < cutoff or published > now or result.entry_id in seen_ids:
                         continue
                     seen_ids.add(result.entry_id)
                     raw_papers.append(result)

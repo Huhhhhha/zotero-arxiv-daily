@@ -288,3 +288,25 @@ class TestBm25Pick:
         candidates = {"a.tex": "hello", "b.tex": "world"}
         result = _bm25_pick("", candidates)
         assert result in candidates
+
+
+def test_weekly_subject_uses_original_digest_date(config, monkeypatch):
+    from email import message_from_string
+    from email.header import decode_header
+    config.source.arxiv.days_back = 7
+    config.source.arxiv.as_of = "2026-10-20T06:17:00+08:00"
+    sent = []
+    monkeypatch.setattr(smtplib, "SMTP", make_stub_smtp(sent))
+    send_email(config, "<html>recovery</html>")
+    subject = message_from_string(sent[0][2])["Subject"]
+    assert decode_header(subject)[0][0].decode("utf-8") == "Weekly arXiv 2026/10/20"
+
+
+def test_smtp_quit_failure_after_acceptance_does_not_trigger_resend(config, monkeypatch):
+    sent = []
+    class AcceptedThenQuitFails(make_stub_smtp(sent)):
+        def quit(self):
+            raise OSError("connection already closed")
+    monkeypatch.setattr(smtplib, "SMTP", AcceptedThenQuitFails)
+    send_email(config, "<html>accepted</html>")
+    assert len(sent) == 1

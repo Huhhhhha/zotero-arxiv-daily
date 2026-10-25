@@ -164,7 +164,7 @@ class Executor:
             if have_embeddings:
                 def mmr(p: Paper) -> float:
                     relevance = (p.score or 0.0) / 10.0
-                    max_sim = max(_cosine(p.embedding, s.embedding) for s in selected)
+                    max_sim = max((_cosine(p.embedding, s.embedding) for s in selected), default=0.0)
                     return mmr_lambda * relevance - (1 - mmr_lambda) * max_sim
                 best = max(remaining, key=mmr)
             else:
@@ -177,12 +177,12 @@ class Executor:
         return selected
 
     
-    def run(self):
+    def run(self) -> bool:
         corpus = self.fetch_zotero_corpus()
         corpus = self.filter_corpus(corpus)
         if len(corpus) == 0:
-            logger.error(f"No zotero papers found. Please check your zotero settings:\n{self.config.zotero}")
-            return
+            logger.error("No zotero papers found. Please check your Zotero settings.")
+            return False
         all_papers = []
         partial_sources = []
         for source, retriever in self.retrievers.items():
@@ -216,7 +216,7 @@ class Executor:
                 p.generate_affiliations(self.openai_client, self.config.llm)
         elif not self.config.executor.send_empty:
             logger.info("No new papers found. No email will be sent.")
-            return
+            return False
         logger.info("Sending email...")
         notice = (
             f"arXiv API 限流，本期候选论文抓取不完整（{'; '.join(partial_sources)}），"
@@ -225,3 +225,4 @@ class Executor:
         email_content = render_email(reranked_papers, notice)
         send_email(self.config, email_content)
         logger.info("Email sent successfully")
+        return True
