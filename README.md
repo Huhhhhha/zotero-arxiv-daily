@@ -176,6 +176,8 @@ The weekly workflow targets Tuesday 06:17 Beijing time. It checks delivery again
 
 Recovery keeps the seven-day retrieval window fixed to the original Tuesday, including its date in the email subject. To recover an older digest manually, run **Send emails weekly** and set `digest_date` to that Tuesday (`YYYY-MM-DD`). Leave `force` off unless you intentionally want a second copy. An empty weekly paper list still sends a status email. Local/daily use retains the configured `send_empty` behavior.
 
+Set the Actions variable `DIGEST_START_DATE` to a Tuesday (`YYYY-MM-DD`) to resume future delivery without recovering older missed weeks. Earlier digests are suppressed without creating a false delivery receipt.
+
 The optional `source.arxiv.as_of` configuration is a timezone-aware ISO timestamp for reproducible date-range retrieval; the weekly workflow sets it automatically.
 
 ### Local Running

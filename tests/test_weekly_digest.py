@@ -88,3 +88,29 @@ def test_receipt_api_failure_is_not_silently_treated_as_a_skip():
         raise OSError("GitHub unavailable")
     with pytest.raises(OSError):
         guard.delivered("receipt", "main", fail)
+
+
+@pytest.mark.parametrize("force", ["false", "true"])
+def test_resume_date_suppresses_old_digest_without_faking_a_receipt(monkeypatch, tmp_path, force):
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("DIGEST_START_DATE", "2026-10-27")
+    monkeypatch.setenv("FORCE_SEND", force)
+    monkeypatch.setattr(guard, "digest_window", lambda **kw: ("2026-10-20", "2026-10-20T06:17:00+08:00"))
+    def unexpected(*args):
+        raise AssertionError("Suppressed weeks must not query delivery or send")
+    monkeypatch.setattr(guard, "delivered", unexpected)
+    guard.main()
+    assert "should_send=false" in output.read_text()
+
+
+def test_resume_date_allows_the_next_tuesday(monkeypatch, tmp_path):
+    output = tmp_path / "output"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("DIGEST_START_DATE", "2026-10-27")
+    monkeypatch.setenv("DEFAULT_BRANCH", "main")
+    monkeypatch.setenv("FORCE_SEND", "false")
+    monkeypatch.setattr(guard, "digest_window", lambda **kw: ("2026-10-27", "2026-10-27T06:17:00+08:00"))
+    monkeypatch.setattr(guard, "delivered", lambda *args: False)
+    guard.main()
+    assert "should_send=true" in output.read_text()

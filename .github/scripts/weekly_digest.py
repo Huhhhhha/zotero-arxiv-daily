@@ -71,7 +71,12 @@ def main():
     day, end = digest_window(requested_date=os.environ.get("REQUESTED_DIGEST_DATE", ""))
     artifact_name = f"weekly-digest-delivered-{day}"
     force = os.environ.get("FORCE_SEND", "").lower() == "true"
-    skip = not force and delivered(artifact_name, os.environ["DEFAULT_BRANCH"])
+    start = os.environ.get("DIGEST_START_DATE", "")
+    minimum = date.fromisoformat(start) if start else None
+    if minimum and minimum.weekday() != 1:
+        raise ValueError("DIGEST_START_DATE must be a Tuesday (YYYY-MM-DD).")
+    before_start = minimum is not None and date.fromisoformat(day) < minimum
+    skip = before_start or (not force and delivered(artifact_name, os.environ["DEFAULT_BRANCH"]))
     outputs = {
         "digest_date": day,
         "as_of": end,
@@ -81,7 +86,11 @@ def main():
     with Path(os.environ["GITHUB_OUTPUT"]).open("a", encoding="utf-8") as file:
         for key, value in outputs.items():
             file.write(f"{key}={value}\n")
-    print(f"Digest {day}: {'SMTP delivery receipt exists; skipping' if skip else 'no receipt; sending'}")
+    if before_start:
+        reason = f"delivery begins {start}; older digest suppressed by configuration"
+    else:
+        reason = "SMTP delivery receipt exists; skipping" if skip else "no receipt; sending"
+    print(f"Digest {day}: {reason}")
 
 
 if __name__ == "__main__":
