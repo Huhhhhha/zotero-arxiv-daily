@@ -12,12 +12,20 @@ on:
         default: false
         type: boolean
   schedule:
-    # Beijing 06:17 / 22:19 / 10:23 each day. Tuesday is the primary
+    # Explicit Asia/Shanghai schedules: 06:17 / 22:19 / 10:23 each day. Tuesday is the primary
     # delivery day; later slots recover a missed trigger or failed send.
     # A receipt for the Tuesday digest keeps every later slot idempotent.
-    - cron: '17 22 * * *'
-    - cron: '19 14 * * *'
-    - cron: '23 02 * * *'
+    # Re-save cron after re-enabling a fork to refresh its schedule registration.
+    - cron: '17 6 * * *'
+      timezone: 'Asia/Shanghai'
+    - cron: '19 22 * * *'
+      timezone: 'Asia/Shanghai'
+    - cron: '23 10 * * *'
+      timezone: 'Asia/Shanghai'
+
+    # Temporary, read-only verification; the matching job cannot send email.
+    - cron: '*/5 * * * *'
+      timezone: 'Asia/Shanghai'
 
 permissions:
   contents: read
@@ -28,7 +36,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  verify-scheduled-trigger:
+    if: github.event_name == 'schedule' && github.event.schedule == '*/5 * * * *'
+    name: Verify scheduled trigger (no email)
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - run: date -u
+
   calculate-and-send:
+    if: github.event_name != 'schedule' || github.event.schedule != '*/5 * * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
