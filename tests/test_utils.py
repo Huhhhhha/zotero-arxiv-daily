@@ -310,3 +310,36 @@ def test_smtp_quit_failure_after_acceptance_does_not_trigger_resend(config, monk
     monkeypatch.setattr(smtplib, "SMTP", AcceptedThenQuitFails)
     send_email(config, "<html>accepted</html>")
     assert len(sent) == 1
+
+
+def test_smtp_port_465_uses_ssl_immediately(config, monkeypatch):
+    sent = []
+    config.email.smtp_port = 465
+
+    class DirectSSL(make_stub_smtp(sent)):
+        def __init__(self, host, port, timeout):
+            assert (host, port, timeout) == ("localhost", 465, 60)
+            super().__init__(host, port, timeout=timeout)
+
+    def unexpected_plaintext(*args, **kwargs):
+        raise AssertionError("Port 465 must not start a plaintext SMTP session")
+
+    monkeypatch.setattr(smtplib, "SMTP", unexpected_plaintext)
+    monkeypatch.setattr(smtplib, "SMTP_SSL", DirectSSL)
+    send_email(config, "<html>ssl</html>")
+    assert len(sent) == 1
+
+
+def test_smtp_port_465_does_not_fall_back_to_plaintext(config, monkeypatch):
+    config.email.smtp_port = 465
+
+    def failed_ssl(*args, **kwargs):
+        raise OSError("SSL unavailable")
+
+    def unexpected_plaintext(*args, **kwargs):
+        raise AssertionError("Port 465 must not fall back to plaintext")
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", failed_ssl)
+    monkeypatch.setattr(smtplib, "SMTP", unexpected_plaintext)
+    with pytest.raises(OSError, match="SSL unavailable"):
+        send_email(config, "<html>ssl failure</html>")

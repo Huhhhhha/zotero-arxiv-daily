@@ -159,16 +159,20 @@ def send_email(config:DictConfig, html:str):
     prefix = 'Weekly arXiv' if days_back > 1 else 'Daily arXiv'
     msg['Subject'] = Header(f'{prefix} {today}', 'utf-8').encode()
 
-    try:
-        server = smtplib.SMTP(smtp_server, smtp_port)
-        server.starttls()
-    except Exception as e:
-        logger.debug(f"Failed to use TLS. {e}\nTry to use SSL.")
+    if int(smtp_port) == 465:
+        # Port 465 expects implicit TLS from the start, not a STARTTLS upgrade.
+        server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=60)
+    else:
         try:
-            server = smtplib.SMTP_SSL(smtp_server, smtp_port)
-        except Exception as e:
-            logger.debug(f"Failed to use SSL. {e}\nTry to use plain text.")
             server = smtplib.SMTP(smtp_server, smtp_port)
+            server.starttls()
+        except Exception as e:
+            logger.debug(f"Failed to use TLS. {e}\nTry to use SSL.")
+            try:
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port)
+            except Exception as e:
+                logger.debug(f"Failed to use SSL. {e}\nTry to use plain text.")
+                server = smtplib.SMTP(smtp_server, smtp_port)
 
     server.login(sender, password)
     server.sendmail(sender, [receiver], msg.as_string())
