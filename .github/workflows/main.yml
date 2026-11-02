@@ -51,6 +51,15 @@ jobs:
           DIGEST_START_DATE: ${{ vars.DIGEST_START_DATE }}
         run: python3 .github/scripts/weekly_digest.py
 
+      - name: Check SMTP authentication before fetching papers
+        id: smtp_check
+        if: steps.delivery.outputs.should_send == 'true'
+        env:
+          SENDER: ${{ secrets.SENDER }}
+          SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
+          CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
+        run: python3 .github/scripts/check_smtp.py
+
       - name: Setup uv
         if: steps.delivery.outputs.should_send == 'true'
         uses: astral-sh/setup-uv@v7
@@ -85,7 +94,7 @@ jobs:
           overwrite: true
 
       - name: Notify on failure
-        if: failure()
+        if: failure() && steps.smtp_check.outcome != 'failure'
         continue-on-error: true
         env:
           SENDER: ${{ secrets.SENDER }}

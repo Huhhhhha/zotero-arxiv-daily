@@ -2,7 +2,8 @@ name: Check SMTP authentication
 on:
   workflow_dispatch:
 
-permissions: {}
+permissions:
+  contents: read
 
 jobs:
   check-smtp:
@@ -14,32 +15,7 @@ jobs:
       SENDER_PASSWORD: ${{ secrets.SENDER_PASSWORD }}
       CUSTOM_CONFIG: ${{ vars.CUSTOM_CONFIG }}
     steps:
+      - name: Checkout
+        uses: actions/checkout@v6
       - name: Check SMTP login
-        run: |
-          python3 - <<'PY'
-          import os
-          import re
-          import smtplib
-          import sys
-
-          config = os.environ.get("CUSTOM_CONFIG", "")
-          server = re.search(r"^\s*smtp_server:\s*['\"]?([^\s'\"#]+)", config, re.MULTILINE)
-          port = re.search(r"^\s*smtp_port:\s*['\"]?(\d+)", config, re.MULTILINE)
-          sender = os.environ.get("SENDER", "")
-          password = os.environ.get("SENDER_PASSWORD", "")
-          if not (server and port and sender and password):
-              sys.exit("SMTP host, port, sender, or authorization code is missing.")
-          try:
-              if int(port.group(1)) == 465:
-                  connection = smtplib.SMTP_SSL(server.group(1), int(port.group(1)), timeout=30)
-              else:
-                  connection = smtplib.SMTP(server.group(1), int(port.group(1)), timeout=30)
-                  connection.starttls()
-              with connection:
-                  connection.login(sender, password)
-              print("SMTP authentication succeeded. No email was sent.")
-          except smtplib.SMTPAuthenticationError as exc:
-              sys.exit(f"SMTP login was rejected (status {exc.smtp_code}).")
-          except (smtplib.SMTPException, OSError) as exc:
-              sys.exit(f"SMTP login did not complete: {type(exc).__name__}.")
-          PY
+        run: python3 .github/scripts/check_smtp.py
